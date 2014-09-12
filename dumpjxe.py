@@ -18,14 +18,15 @@ def Relative(name):
 		decoder = lambda obj, ctx: obj.base + obj.ptr if obj.ptr != 0 else None)
 		#decoder = deco)
 
-def Carp(ptr, ctx, struct):
-	addr = ptr(ctx)
-	if addr is None:
-		print "None: " + repr(ctx)
-		print struct
-		return 0
-	return addr
-		
+def SetAddr(obj, ctx):
+	obj.addr = obj.base + obj.ptr
+	return obj
+
+def DebugRelative(name):
+	return ExprAdapter(Struct(name, Anchor("base"), SLInt32("ptr")), 
+		encoder = None,
+		decoder = SetAddr)
+		#decoder = deco)
 
 def MaybePointer(ptr, struct):
 	return If(lambda ctx: ptr(ctx) is not None, Pointer(ptr, struct))
@@ -42,6 +43,15 @@ def StringRef(name):
 		encoder = None,
 		decoder = lambda obj, ctx: obj.str)
 	
+def BytecodeSize(ctx):
+	size = ctx.bytecode_size_low;
+	mods = ctx.modifiers
+	if mods.use_bytecodesize_high:
+		size += ctx.bytecode_size_high << 16;
+	size *= 4
+	if mods.add_four1:
+		size += 4
+	return size
 
 J9ROMImageHeader = Struct("J9ROMImageHeader",
 	Enum(ULInt32("signature"),
@@ -56,7 +66,7 @@ J9ROMImageHeader = Struct("J9ROMImageHeader",
 	Relative("first_class_pointer"),
 	Relative("aot_pointer"),
 	Array(16, ULInt8("symbol_file_id")),
-	Pointer(lambda ctx: ctx.toc_pointer, Array(lambda ctx: ctx.class_count, 
+	Pointer(lambda ctx: ctx.toc_pointer, Array(lambda ctx: min(99999, ctx.class_count), 
 		Struct("J9ROMClassTOCEntry",
 			StringRef("class_name"),
 			Relative("class_pointer"),
@@ -80,7 +90,7 @@ J9ROMImageHeader = Struct("J9ROMImageHeader",
 			    ULInt32("instance_size"),
 			    ULInt32("instance_shape"),
 			    Relative("cp_shape_description_pointer"),
-			    StringRef("outer_class_name_pointer"),
+			    Relative("outer_class_name_pointer"),
 			    ULInt32("member_access_flags"),
 			    ULInt32("inner_class_count"),
 			    Relative("inner_classes_pointer"),
@@ -89,14 +99,36 @@ J9ROMImageHeader = Struct("J9ROMImageHeader",
 			    ULInt32("optional_flags"),
 			    Relative("optional_info_pointer"),
 					MaybePointer(lambda ctx: ctx.interfaces_pointer, Array(lambda ctx: ctx.interface_count, StringRef("interfaces"))),
-					If(lambda ctx: ctx.class_name == 'java/util/MapEntry', MaybePointer(lambda ctx: ctx.rom_methods_pointer, Array(lambda ctx: min(4, ctx.rom_method_count), Struct("method",
-						Relative("name"),
-						Relative("signature"),
-						ULInt32("modifiers"),
+					If(lambda ctx: ctx.class_name != 'jxava/util/MapEntry', MaybePointer(lambda ctx: ctx.rom_methods_pointer, Array(lambda ctx: min(4444, ctx.rom_method_count), Struct("method",
+						StringRef("name"),
+						StringRef("signature"),
+						# xx8xxxxx -> use_bytecodesize_high
+						# xxxxxxx2 -> add_four1
+            # xxxxx2xx -> use_relative_bytecode
+            # xxxx4xxx -> add_four2
+						BitStruct("modifiers", 
+							BitField("unknown1", 8),
+							Flag("use_bytecodesize_high"),
+							BitField("unknown2", 8),
+							Flag("add_four2"),
+							BitField("unknown3", 4),
+							Flag("has_bytecode_extra"),
+							BitField("unknown4", 7),
+							Flag("add_four1"),
+							BitField("unknown5", 1),
+						),
 						ULInt16("max_stack"),
-						ULInt24("bytecode_size"),
+						ULInt16("bytecode_size_low"),
+						ULInt8("bytecode_size_high"),
 						ULInt8("arg_count"),
 						ULInt16("temp_count"),
+						Value("bytecodesize", BytecodeSize),
+						Padding(BytecodeSize),
+						If(lambda ctx: ctx.modifiers.has_bytecode_extra, Struct("bytecode_extra",
+							ULInt16("size16"), ULInt16("size4"),
+							Padding(lambda ctx: ctx.size16 * 16 + ctx.size4 * 4),
+						))
+						
 					)))),
 			)),
 		)
